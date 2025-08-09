@@ -13,8 +13,6 @@ except ImportError:
     ImageTk = None
 from io import BytesIO
 from typing import List, Dict, Optional
-import webbrowser
-import urllib.parse
 
 class AnimeSearchAPI:
     """Class to handle anime search using MAL-Sync and Jikan APIs"""
@@ -80,225 +78,6 @@ class AnimeSearchAPI:
             print(f"Error loading image: {e}")
             return None
 
-class MALSyncIntegration:
-    """Class to handle MAL-Sync integration for updating anime status"""
-    
-    def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'AniCliGUI-MALSync/1.0'
-        })
-        
-        # MAL API endpoints
-        self.mal_api_base = "https://api.myanimelist.net/v2"
-        self.mal_auth_url = "https://myanimelist.net/v1/oauth2/authorize"
-        self.mal_token_url = "https://myanimelist.net/v1/oauth2/token"
-        
-        # AniList API
-        self.anilist_api = "https://graphql.anilist.co"
-        
-        # Client ID for MAL (you would need to register an app)
-        self.mal_client_id = "your_mal_client_id"  # Replace with actual client ID
-        
-        # Storage for tokens
-        self.mal_token = None
-        self.anilist_token = None
-        
-        # Load saved tokens
-        self.load_tokens()
-    
-    def load_tokens(self):
-        """Load saved authentication tokens from file"""
-        try:
-            if os.path.exists('mal_tokens.json'):
-                with open('mal_tokens.json', 'r') as f:
-                    data = json.load(f)
-                    self.mal_token = data.get('mal_token')
-                    self.anilist_token = data.get('anilist_token')
-        except Exception as e:
-            print(f"Error loading tokens: {e}")
-    
-    def save_tokens(self):
-        """Save authentication tokens to file"""
-        try:
-            data = {
-                'mal_token': self.mal_token,
-                'anilist_token': self.anilist_token
-            }
-            with open('mal_tokens.json', 'w') as f:
-                json.dump(data, f)
-        except Exception as e:
-            print(f"Error saving tokens: {e}")
-    
-    def authenticate_mal(self):
-        """Start MAL OAuth authentication process"""
-        # Generate auth URL
-        params = {
-            'response_type': 'code',
-            'client_id': self.mal_client_id,
-            'redirect_uri': 'http://localhost:8080/auth/callback',
-            'state': 'malsync_auth',
-            'code_challenge_method': 'plain',
-            'code_challenge': 'malsync_challenge'
-        }
-        
-        auth_url = f"{self.mal_auth_url}?{urllib.parse.urlencode(params)}"
-        webbrowser.open(auth_url)
-        
-        return "Please complete authentication in your browser"
-    
-    def authenticate_anilist(self):
-        """Start AniList OAuth authentication process"""
-        params = {
-            'client_id': '12345',  # AniList client ID
-            'response_type': 'token'
-        }
-        
-        auth_url = f"https://anilist.co/api/v2/oauth/authorize?{urllib.parse.urlencode(params)}"
-        webbrowser.open(auth_url)
-        
-        return "Please complete authentication in your browser"
-    
-    def update_anime_status(self, anime_id: int, episode: int, status: str = "watching", platform: str = "mal"):
-        """Update anime episode progress and status"""
-        try:
-            if platform == "mal" and self.mal_token:
-                return self._update_mal_anime(anime_id, episode, status)
-            elif platform == "anilist" and self.anilist_token:
-                return self._update_anilist_anime(anime_id, episode, status)
-            else:
-                return {"error": f"Not authenticated with {platform}"}
-        except Exception as e:
-            return {"error": str(e)}
-    
-    def _update_mal_anime(self, anime_id: int, episode: int, status: str):
-        """Update anime on MyAnimeList"""
-        url = f"{self.mal_api_base}/anime/{anime_id}/my_list_status"
-        headers = {
-            'Authorization': f'Bearer {self.mal_token}',
-            'Content-Type': 'application/x-www-form-urlencoded'
-        }
-        
-        data = {
-            'status': status,
-            'num_watched_episodes': episode,
-        }
-        
-        # Auto-complete if watched all episodes
-        if status == "completed":
-            data['finish_date'] = self._get_current_date()
-        elif status == "watching" and episode == 1:
-            data['start_date'] = self._get_current_date()
-        
-        response = self.session.put(url, headers=headers, data=data)
-        
-        if response.status_code == 200:
-            return {"success": True, "message": f"Updated episode {episode} on MAL"}
-        else:
-            return {"error": f"MAL API error: {response.status_code}"}
-    
-    def _update_anilist_anime(self, anime_id: int, episode: int, status: str):
-        """Update anime on AniList"""
-        query = """
-        mutation ($id: Int, $progress: Int, $status: MediaListStatus) {
-            SaveMediaListEntry(mediaId: $id, progress: $progress, status: $status) {
-                id
-                progress
-                status
-            }
-        }
-        """
-        
-        variables = {
-            'id': anime_id,
-            'progress': episode,
-            'status': status.upper()
-        }
-        
-        headers = {
-            'Authorization': f'Bearer {self.anilist_token}',
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
-        
-        response = self.session.post(
-            self.anilist_api,
-            json={'query': query, 'variables': variables},
-            headers=headers
-        )
-        
-        if response.status_code == 200:
-            return {"success": True, "message": f"Updated episode {episode} on AniList"}
-        else:
-            return {"error": f"AniList API error: {response.status_code}"}
-    
-    def _get_current_date(self):
-        """Get current date in YYYY-MM-DD format"""
-        from datetime import datetime
-        return datetime.now().strftime("%Y-%m-%d")
-    
-    def search_anime_ids(self, anime_title: str):
-        """Search for anime IDs on both MAL and AniList"""
-        results = {}
-        
-        # Search MAL
-        try:
-            mal_id = self._search_mal_id(anime_title)
-            if mal_id:
-                results['mal_id'] = mal_id
-        except Exception as e:
-            print(f"MAL search error: {e}")
-        
-        # Search AniList
-        try:
-            anilist_id = self._search_anilist_id(anime_title)
-            if anilist_id:
-                results['anilist_id'] = anilist_id
-        except Exception as e:
-            print(f"AniList search error: {e}")
-        
-        return results
-    
-    def _search_mal_id(self, anime_title: str):
-        """Search for anime ID on MAL"""
-        if not self.mal_token:
-            return None
-        
-        url = f"{self.mal_api_base}/anime"
-        headers = {'Authorization': f'Bearer {self.mal_token}'}
-        params = {'q': anime_title, 'limit': 1}
-        
-        response = self.session.get(url, headers=headers, params=params)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('data'):
-                return data['data'][0]['node']['id']
-        return None
-    
-    def _search_anilist_id(self, anime_title: str):
-        """Search for anime ID on AniList"""
-        query = """
-        query ($search: String) {
-            Media (search: $search, type: ANIME) {
-                id
-                idMal
-            }
-        }
-        """
-        
-        variables = {'search': anime_title}
-        
-        response = self.session.post(
-            self.anilist_api,
-            json={'query': query, 'variables': variables}
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('data', {}).get('Media'):
-                return data['data']['Media']['id']
-        return None
-
 class AniCliGUI:
     def __init__(self):
         # Set the appearance mode and color theme
@@ -307,9 +86,9 @@ class AniCliGUI:
         
         # Create the main window
         self.root = ctk.CTk()
-        self.root.title("Ani-CLI GUI with MAL-Sync")
-        self.root.geometry("1200x800")
-        self.root.minsize(900, 700)
+        self.root.title("Ani-CLI GUI")
+        self.root.geometry("1000x700")
+        self.root.minsize(800, 600)
         
         # Git Bash path
         self.git_bash_path = r"C:\Program Files\Git\bin\bash.exe"
@@ -317,9 +96,7 @@ class AniCliGUI:
         # Variables
         self.current_process = None
         self.anime_search_api = AnimeSearchAPI()
-        self.mal_sync = MALSyncIntegration()
         self.selected_anime = None
-        self.current_episode = 1
         
         self.setup_ui()
         
@@ -329,36 +106,12 @@ class AniCliGUI:
         main_frame.pack(fill="both", expand=True, padx=10, pady=10)
         
         # Title
-        title_label = ctk.CTkLabel(main_frame, text="Ani-CLI GUI with MAL-Sync", font=("Arial", 24, "bold"))
+        title_label = ctk.CTkLabel(main_frame, text="Ani-CLI GUI", font=("Arial", 24, "bold"))
         title_label.pack(pady=(10, 20))
         
-        # Create tabview for main content and MAL-Sync
-        self.tabview = ctk.CTkTabview(main_frame, width=1000, height=600)
-        self.tabview.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        
-        # Main anime tab
-        self.tabview.add("Anime Search & Play")
-        anime_tab = self.tabview.tab("Anime Search & Play")
-        
-        # MAL-Sync tab
-        self.tabview.add("MAL-Sync")
-        malsync_tab = self.tabview.tab("MAL-Sync")
-        
-        # Setup anime search interface
-        self.setup_anime_interface(anime_tab)
-        
-        # Setup MAL-Sync interface
-        self.setup_malsync_interface(malsync_tab)
-        
-        # Status bar (outside tabs)
-        self.status_label = ctk.CTkLabel(main_frame, text="Ready", font=("Arial", 12))
-        self.status_label.pack(fill="x", padx=10, pady=(5, 5))
-    
-    def setup_anime_interface(self, parent):
-        """Setup the main anime search and play interface"""
         # Single anime input section
-        input_frame = ctk.CTkFrame(parent)
-        input_frame.pack(fill="x", padx=10, pady=(10, 10))
+        input_frame = ctk.CTkFrame(main_frame)
+        input_frame.pack(fill="x", padx=10, pady=(0, 10))
         
         input_label = ctk.CTkLabel(input_frame, text="Search or Enter Anime Name:", font=("Arial", 14))
         input_label.pack(anchor="w", padx=10, pady=(10, 5))
@@ -375,7 +128,7 @@ class AniCliGUI:
         search_button.pack(side="right", padx=(0, 5), pady=5)
         
         # Search results frame
-        results_frame = ctk.CTkFrame(parent)
+        results_frame = ctk.CTkFrame(main_frame)
         results_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         
         results_label = ctk.CTkLabel(results_frame, text="Search Results:", font=("Arial", 14))
@@ -386,10 +139,10 @@ class AniCliGUI:
         self.results_scrollable.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         
         # Options section
-        self.setup_options_section(parent)
+        self.setup_options_section(main_frame)
         
         # Buttons section
-        button_frame = ctk.CTkFrame(parent)
+        button_frame = ctk.CTkFrame(main_frame)
         button_frame.pack(fill="x", padx=10, pady=(0, 10))
         
         play_selected_button = ctk.CTkButton(button_frame, text="Play Selected", command=self.play_selected_anime)
@@ -403,119 +156,10 @@ class AniCliGUI:
         
         stop_button = ctk.CTkButton(button_frame, text="Stop", command=self.stop_process, fg_color="red")
         stop_button.pack(side="right", padx=5, pady=10)
-    
-    def setup_malsync_interface(self, parent):
-        """Setup the MAL-Sync interface similar to browser extension"""
-        # MAL-Sync title
-        malsync_title = ctk.CTkLabel(parent, text="MAL-Sync Integration", font=("Arial", 20, "bold"))
-        malsync_title.pack(pady=(10, 20))
         
-        # Authentication section
-        auth_frame = ctk.CTkFrame(parent)
-        auth_frame.pack(fill="x", padx=10, pady=(0, 10))
-        
-        auth_label = ctk.CTkLabel(auth_frame, text="Authentication:", font=("Arial", 16, "bold"))
-        auth_label.pack(anchor="w", padx=10, pady=(10, 5))
-        
-        auth_buttons_frame = ctk.CTkFrame(auth_frame)
-        auth_buttons_frame.pack(fill="x", padx=10, pady=(0, 10))
-        
-        mal_auth_btn = ctk.CTkButton(auth_buttons_frame, text="Connect MyAnimeList", command=self.authenticate_mal)
-        mal_auth_btn.pack(side="left", padx=5, pady=5)
-        
-        anilist_auth_btn = ctk.CTkButton(auth_buttons_frame, text="Connect AniList", command=self.authenticate_anilist)
-        anilist_auth_btn.pack(side="left", padx=5, pady=5)
-        
-        # Current anime status section
-        status_frame = ctk.CTkFrame(parent)
-        status_frame.pack(fill="x", padx=10, pady=(0, 10))
-        
-        status_label = ctk.CTkLabel(status_frame, text="Current Anime Status:", font=("Arial", 16, "bold"))
-        status_label.pack(anchor="w", padx=10, pady=(10, 5))
-        
-        # Anime info display
-        self.anime_info_frame = ctk.CTkFrame(status_frame)
-        self.anime_info_frame.pack(fill="x", padx=10, pady=(0, 10))
-        
-        self.current_anime_label = ctk.CTkLabel(self.anime_info_frame, text="No anime selected", font=("Arial", 14))
-        self.current_anime_label.pack(anchor="w", padx=10, pady=5)
-        
-        # Episode controls
-        episode_frame = ctk.CTkFrame(status_frame)
-        episode_frame.pack(fill="x", padx=10, pady=(0, 10))
-        
-        episode_label = ctk.CTkLabel(episode_frame, text="Episode:", font=("Arial", 12))
-        episode_label.pack(side="left", padx=5, pady=5)
-        
-        self.episode_var = ctk.StringVar(value="1")
-        self.episode_entry = ctk.CTkEntry(episode_frame, textvariable=self.episode_var, width=80)
-        self.episode_entry.pack(side="left", padx=5, pady=5)
-        
-        # Status dropdown
-        status_label = ctk.CTkLabel(episode_frame, text="Status:", font=("Arial", 12))
-        status_label.pack(side="left", padx=(20, 5), pady=5)
-        
-        self.status_var = ctk.StringVar(value="watching")
-        self.status_dropdown = ctk.CTkOptionMenu(
-            episode_frame, 
-            variable=self.status_var,
-            values=["watching", "completed", "on_hold", "dropped", "plan_to_watch"]
-        )
-        self.status_dropdown.pack(side="left", padx=5, pady=5)
-        
-        # Platform selection
-        platform_label = ctk.CTkLabel(episode_frame, text="Platform:", font=("Arial", 12))
-        platform_label.pack(side="left", padx=(20, 5), pady=5)
-        
-        self.platform_var = ctk.StringVar(value="mal")
-        self.platform_dropdown = ctk.CTkOptionMenu(
-            episode_frame,
-            variable=self.platform_var,
-            values=["mal", "anilist"]
-        )
-        self.platform_dropdown.pack(side="left", padx=5, pady=5)
-        
-        # Update buttons
-        update_frame = ctk.CTkFrame(status_frame)
-        update_frame.pack(fill="x", padx=10, pady=(0, 10))
-        
-        update_episode_btn = ctk.CTkButton(update_frame, text="Update Episode", command=self.update_episode_status)
-        update_episode_btn.pack(side="left", padx=5, pady=5)
-        
-        mark_completed_btn = ctk.CTkButton(update_frame, text="Mark as Completed", command=self.mark_as_completed)
-        mark_completed_btn.pack(side="left", padx=5, pady=5)
-        
-        auto_update_btn = ctk.CTkButton(update_frame, text="Auto-Update on Play", command=self.toggle_auto_update)
-        auto_update_btn.pack(side="left", padx=5, pady=5)
-        
-        # Quick actions like browser extension
-        quick_frame = ctk.CTkFrame(parent)
-        quick_frame.pack(fill="x", padx=10, pady=(0, 10))
-        
-        quick_label = ctk.CTkLabel(quick_frame, text="Quick Actions:", font=("Arial", 16, "bold"))
-        quick_label.pack(anchor="w", padx=10, pady=(10, 5))
-        
-        quick_buttons_frame = ctk.CTkFrame(quick_frame)
-        quick_buttons_frame.pack(fill="x", padx=10, pady=(0, 10))
-        
-        plus_one_btn = ctk.CTkButton(quick_buttons_frame, text="+1 Episode", command=lambda: self.quick_update_episode(1))
-        plus_one_btn.pack(side="left", padx=5, pady=5)
-        
-        minus_one_btn = ctk.CTkButton(quick_buttons_frame, text="-1 Episode", command=lambda: self.quick_update_episode(-1))
-        minus_one_btn.pack(side="left", padx=5, pady=5)
-        
-        set_watching_btn = ctk.CTkButton(quick_buttons_frame, text="Set Watching", command=lambda: self.quick_set_status("watching"))
-        set_watching_btn.pack(side="left", padx=5, pady=5)
-        
-        # Log/Output area
-        log_frame = ctk.CTkFrame(parent)
-        log_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        
-        log_label = ctk.CTkLabel(log_frame, text="MAL-Sync Log:", font=("Arial", 14, "bold"))
-        log_label.pack(anchor="w", padx=10, pady=(10, 5))
-        
-        self.malsync_log = ctk.CTkTextbox(log_frame, height=150)
-        self.malsync_log.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        # Status bar
+        self.status_label = ctk.CTkLabel(main_frame, text="Ready", font=("Arial", 12))
+        self.status_label.pack(fill="x", padx=10, pady=(0, 5))
     
     def setup_options_section(self, parent):
         """Setup the options section (common for both tabs)"""
@@ -619,8 +263,6 @@ class AniCliGUI:
             self.selected_anime = anime
             self._highlight_selected_result(result_frame)
             self.update_status(f"Selected: {anime['title']}")
-            # Update MAL-Sync info when anime is selected
-            self.update_selected_anime_info()
         
         result_frame.bind("<Button-1>", select_anime)
         
@@ -861,120 +503,6 @@ class AniCliGUI:
             messagebox.showwarning("Warning", f"Could not verify ani-cli installation: {str(e)}")
             
         self.root.mainloop()
-    
-    # MAL-Sync Integration Methods
-    def authenticate_mal(self):
-        """Authenticate with MyAnimeList"""
-        result = self.mal_sync.authenticate_mal()
-        self.log_malsync(f"MAL Auth: {result}")
-        self.update_status("MAL authentication started - check browser")
-    
-    def authenticate_anilist(self):
-        """Authenticate with AniList"""
-        result = self.mal_sync.authenticate_anilist()
-        self.log_malsync(f"AniList Auth: {result}")
-        self.update_status("AniList authentication started - check browser")
-    
-    def update_episode_status(self):
-        """Update episode status on selected platform"""
-        if not self.selected_anime:
-            messagebox.showwarning("Warning", "Please select an anime first!")
-            return
-        
-        try:
-            episode = int(self.episode_var.get())
-            status = self.status_var.get()
-            platform = self.platform_var.get()
-            
-            # Get anime ID for the platform
-            anime_title = self.selected_anime['title']
-            ids = self.mal_sync.search_anime_ids(anime_title)
-            
-            if platform == "mal" and 'mal_id' in ids:
-                result = self.mal_sync.update_anime_status(ids['mal_id'], episode, status, "mal")
-            elif platform == "anilist" and 'anilist_id' in ids:
-                result = self.mal_sync.update_anime_status(ids['anilist_id'], episode, status, "anilist")
-            else:
-                result = {"error": f"Could not find anime ID for {platform}"}
-            
-            if result.get('success'):
-                self.log_malsync(f"✅ {result['message']}")
-                self.update_status(f"Updated {anime_title} episode {episode}")
-            else:
-                self.log_malsync(f"❌ Error: {result.get('error', 'Unknown error')}")
-                self.update_status("Update failed")
-                
-        except ValueError:
-            messagebox.showerror("Error", "Please enter a valid episode number!")
-        except Exception as e:
-            self.log_malsync(f"❌ Error: {str(e)}")
-            self.update_status("Update failed")
-    
-    def mark_as_completed(self):
-        """Mark anime as completed"""
-        if not self.selected_anime:
-            messagebox.showwarning("Warning", "Please select an anime first!")
-            return
-        
-        # Set status to completed and episode to total episodes if available
-        self.status_var.set("completed")
-        if self.selected_anime.get('episodes'):
-            self.episode_var.set(str(self.selected_anime['episodes']))
-        
-        self.update_episode_status()
-    
-    def quick_update_episode(self, change):
-        """Quick update episode by +/- 1"""
-        try:
-            current = int(self.episode_var.get())
-            new_episode = max(1, current + change)
-            self.episode_var.set(str(new_episode))
-            
-            if self.selected_anime:
-                self.update_episode_status()
-            
-        except ValueError:
-            self.episode_var.set("1")
-    
-    def quick_set_status(self, status):
-        """Quick set status"""
-        self.status_var.set(status)
-        if self.selected_anime:
-            self.update_episode_status()
-    
-    def toggle_auto_update(self):
-        """Toggle auto-update on play"""
-        # This would be implemented to automatically update MAL when playing episodes
-        self.log_malsync("Auto-update feature - Coming soon!")
-        self.update_status("Auto-update feature in development")
-    
-    def log_malsync(self, message):
-        """Log message to MAL-Sync log area"""
-        try:
-            from datetime import datetime
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            formatted_message = f"[{timestamp}] {message}\n"
-            
-            self.malsync_log.insert("end", formatted_message)
-            self.malsync_log.see("end")
-        except:
-            print(f"MAL-Sync: {message}")
-    
-    def update_selected_anime_info(self):
-        """Update the current anime info in MAL-Sync tab"""
-        if self.selected_anime:
-            anime_info = f"Selected: {self.selected_anime['title']}"
-            if self.selected_anime.get('episodes'):
-                anime_info += f" ({self.selected_anime['episodes']} episodes)"
-            if self.selected_anime.get('year'):
-                anime_info += f" - {self.selected_anime['year']}"
-            
-            self.current_anime_label.configure(text=anime_info)
-            
-            # Auto-populate episode 1 if not set
-            if self.episode_var.get() == "1" and not hasattr(self, '_episode_set'):
-                self.episode_var.set("1")
-                self._episode_set = True
 
 def main():
     app = AniCliGUI()
